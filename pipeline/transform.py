@@ -1,40 +1,47 @@
 import polars as pl
 import duckdb
 import os
-import re
 import streamlit as st
-# Define the absolute path to the DuckDB file
-DB_PATH = os.path.abspath("data/dutchie.db")
+import re
+# Import the cached connection function from ingest.py
+from pipeline.ingest import init_db_connection 
 
+# The disk-based DB_PATH is intentionally removed as we use the in-memory DB
+
+# Add Caching Decorator (Essential for Streamlit performance)
+@st.cache_data(show_spinner="Cleaning and modeling data...")
 def clean_and_model():
-    con = duckdb.connect(DB_PATH)
-
+    # --- Connect to the Cached In-Memory Database ---
+    con = init_db_connection() # Get the cached in-memory connection
+    
     try:
+        # Fetch tables names, excluding the final modeled tables
         tables = [t[0] for t in con.execute(
             "SHOW TABLES").fetchall() 
             if t[0] not in ('fact_sales', 'dim_product', 'dim_staff', 'dim_location', 'calendar')
         ]
     except Exception:
-        con.close()
+        # If the DB connection fails to show tables (e.g., first run before any upload)
         return "Database error. Please upload files first."
 
     frames = []
     for t in tables:
         try:
+            # Note: Polars can read directly from DuckDB view/table but reading into Arrow 
+            # and then Polars is often robust across environments.
             df = pl.from_arrow(con.execute(f"SELECT * FROM {t}").arrow())
             frames.append(df)
         except Exception as e:
+            # This is a warning, not a blocker
             print(f"Warning: Failed to load {t}: {e}")
 
     if not frames:
-        con.close()
         return "No raw data found. Upload files first."
 
     # Combine all unique columns from all frames
     all_columns = sorted({col for f in frames for col in f.columns})
     
     # Manually ensure core columns are present for the schema
-    # Add 'promo_applied' and 'refund_original_sale_id' for robust exception handling
     schema_core = {
         'location': pl.Utf8, 'staff_id': pl.Utf8, 'product_name': pl.Utf8, 'category': pl.Utf8, 
         'tender_type': pl.Utf8, 'timestamp': pl.Utf8, 'sale_id': pl.Utf8,
@@ -50,8 +57,13 @@ def clean_and_model():
         # Fill missing core columns with defaults and cast to correct type
         for col, dtype in schema_core.items():
             if col not in f.columns:
-                default_val = False if dtype == pl.Boolean else None
-                f = f.with_columns(pl.lit(default_val).cast(dtype).alias(col))
+                default_val = False if dtype == pl.Boolean else None if dtype == pl.Utf8 else pl.lit(None).cast(dtype)
+                
+                # Handling for Polars literal column creation
+                if default_val is None or isinstance(default_val, bool):
+                    f = f.with_columns(pl.lit(default_val).cast(dtype).alias(col))
+                else:
+                    f = f.with_columns(default_val.alias(col))
         
         # Select and align columns
         aligned.append(f.select([c for c in schema_core.keys() if c in f.columns]))
@@ -66,7 +78,6 @@ def clean_and_model():
         pl.col("tender_type").str.strip_chars().str.to_uppercase().cast(pl.Utf8),
         
         # Robust Timestamp Conversion to Datetime
-        # Assuming format is %Y-%m-%dT%H:%M:%S (like your example)
         pl.col("timestamp").str.strptime(pl.Datetime, "%Y-%m-%dT%H:%M:%S", strict=False)
     ]).drop_nulls(["timestamp"]) # Drop records where timestamp parsing failed
 
@@ -79,7 +90,6 @@ def clean_and_model():
         (pl.col("unit_price") * pl.col("quantity")).alias("gross_sale"),
         
         # Compute NET_SALE (using raw value first, then applying rules below)
-        # Note: Your raw data already has a 'net_sale' column. We recompute/verify.
         (pl.col("unit_price") * pl.col("quantity") - pl.col("discount")).alias("computed_net_sale"),
         
         # Standardize Promo Applied
@@ -106,7 +116,6 @@ def clean_and_model():
     ])
     
     # --- FINAL Net Sales Adjustment for Exceptions (Crucial Step) ---
-    # Net Sales is reduced by discounts/refunds. Voids mean the transaction never happened.
     df = df.with_columns([
         pl.when(pl.col("voided"))
             .then(pl.lit(0.0)) # Voids count as $0 sales
@@ -116,9 +125,9 @@ def clean_and_model():
 
 
     # --- Star Schema Creation ---
-    # Use 'staff_id' as the unique key for staff dimension, which seems more logical
     dim_location = df.select("location").unique().with_row_count("location_id")
-    dim_staff    = df.select("staff_id").unique().with_row_count("staff_key")
+    # staff_id is pseudonymous
+    dim_staff    = df.select("staff_id").unique().with_row_count("staff_key") 
     dim_product  = df.select(["product_name", "category"]).unique().with_row_count("product_key")
 
     calendar = df.select(["date", "hour", "daypart"]).unique().with_row_count("time_key")
@@ -129,19 +138,19 @@ def clean_and_model():
           .join(dim_product, on=["product_name", "category"])
           .join(calendar, on=["date", "hour", "daypart"])
           .select([
-              "sale_id", "quantity", "unit_price", "discount", "gross_sale", "net_sale", # Add gross_sale
+              "sale_id", "quantity", "unit_price", "discount", "gross_sale", "net_sale",
               "voided", "refunded", "tender_type", "promo_applied", 
               "location_id", "staff_key", "product_key", "time_key"
           ])
     )
 
-    # --- DuckDB Ingestion ---
+    # --- DuckDB Ingestion (Using In-Memory 'con') ---
 
-    con.register("fact_sales_df", fact_sales)
-    con.register("dim_product_df", dim_product)
-    con.register("dim_staff_df", dim_staff)
-    con.register("dim_location_df", dim_location)
-    con.register("calendar_df", calendar)
+    con.register("fact_sales_df", fact_sales.to_arrow())
+    con.register("dim_product_df", dim_product.to_arrow())
+    con.register("dim_staff_df", dim_staff.to_arrow())
+    con.register("dim_location_df", dim_location.to_arrow())
+    con.register("calendar_df", calendar.to_arrow())
 
     # Drop existing tables
     con.execute("DROP TABLE IF EXISTS fact_sales")
@@ -157,5 +166,5 @@ def clean_and_model():
     con.execute("CREATE TABLE dim_location AS SELECT * FROM dim_location_df")
     con.execute("CREATE TABLE calendar AS SELECT * FROM calendar_df")
 
-    con.close()
+    # DO NOT CLOSE THE CACHED CONNECTION (con.close() removed)
     return f"✅ Data cleaned. {len(fact_sales)} fact rows ready."
