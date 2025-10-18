@@ -3,16 +3,21 @@ import polars as pl
 import os
 from datetime import date, timedelta
 import streamlit as st
-DB_PATH = os.path.abspath("data/dutchie.db")
+# CRITICAL FIX: Import the cached connection function
+from pipeline.ingest import init_db_connection 
 
-# ---------------------------
-# Helper functions (UNTOUCHED)
-# ---------------------------
+# REMOVED: DB_PATH and disk-based connection logic
 
+# --- Helper functions (FIXED for In-Memory DB) ---
 def expand_all_filters(filters):
     """Replace 'ALL' or empty filters with all distinct values from DB."""
-    con = duckdb.connect(DB_PATH)
+    # CRITICAL FIX: Get the cached in-memory connection
+    con = init_db_connection()
     try:
+        # Check if modeled tables exist before querying
+        if 'dim_location' not in con.execute("SHOW TABLES").fetch_column(0):
+            return filters # Return as is if tables aren't modeled yet
+
         if "locations" in filters and ("ALL" in filters["locations"] or not filters["locations"]):
             filters["locations"] = [
                 r[0] for r in con.execute("SELECT DISTINCT location FROM dim_location").fetchall() if r[0]
@@ -25,10 +30,10 @@ def expand_all_filters(filters):
             filters["staff"] = [
                 r[0] for r in con.execute("SELECT DISTINCT staff_id FROM dim_staff").fetchall() if r[0]
             ]
-    except duckdb.CatalogException:
-        pass
-    finally:
-        con.close()
+    except duckdb.CatalogException as e:
+        print(f"Warning in expand_all_filters: {e}")
+    
+    # DO NOT CLOSE THE CACHED CONNECTION (con.close() removed)
     return filters
 
 def build_where_clause(filters):
@@ -74,18 +79,24 @@ def build_where_clause(filters):
 # KPI Function (UPDATED)
 # ---------------------------
 
+@st.cache_data(show_spinner="Calculating KPIs...")
 def get_kpis(filters=None):
-    con = duckdb.connect(DB_PATH)
+    # CRITICAL FIX: Get the cached in-memory connection
+    con = init_db_connection()
+    
+    # Check if fact_sales table exists
+    if 'fact_sales' not in con.execute("SHOW TABLES").fetch_column(0):
+        # Return a dictionary of zero/empty values if data doesn't exist
+        return None
 
     filters = filters or {}
     # Convert filters to uppercase for matching, except for known case-sensitive keys
     filters = {
-    k: ([v.upper() for v in vals] if k not in ("daypart", "date_range", "order_types") else vals) 
-    for k, vals in filters.items() if vals
+        k: ([v.upper() for v in vals] if k not in ("daypart", "date_range", "order_types") else vals) 
+        for k, vals in filters.items() if vals
     }
 
     filters = expand_all_filters(filters)
-
     where_sql = build_where_clause(filters)
 
     try:
@@ -267,18 +278,22 @@ def get_kpis(filters=None):
         print("⚠️ KPI computation failed:", e)
         return None
 
-    finally:
-        con.close()
+    # DO NOT CLOSE THE CACHED CONNECTION (con.close() removed)
+
 
 # ---------------------------
-# Exceptions & Heatmap (REVISED)
+# Exceptions & Heatmap (FIXED)
 # ---------------------------
 
-# --- REVISED get_exceptions_and_heatmap in pipeline/metrics.py ---
-
+@st.cache_data(show_spinner="Generating exceptions and heatmap...")
 def get_exceptions_and_heatmap(filters=None):
-    con = duckdb.connect(DB_PATH)
-    # ... (Filter setup remains the same) ...
+    # CRITICAL FIX: Get the cached in-memory connection
+    con = init_db_connection()
+    
+    # Check if fact_sales table exists
+    if 'fact_sales' not in con.execute("SHOW TABLES").fetch_column(0):
+        return None, None
+
     filters = expand_all_filters(filters)
     where_sql = build_where_clause(filters)
 
@@ -308,6 +323,7 @@ def get_exceptions_and_heatmap(filters=None):
                 SELECT
                     b.location,
                     b.hour,
+                    -- Count non-voided/non-refunded items as transactions (approximate ticket count)
                     SUM(CASE WHEN b.voided = FALSE AND b.refunded = FALSE THEN 1 ELSE 0 END) AS total_txns,
                     SUM(CASE WHEN b.voided = TRUE THEN 1 ELSE 0 END) AS voids,
                     SUM(CASE WHEN b.refunded = TRUE THEN 1 ELSE 0 END) AS refunds,
@@ -331,9 +347,7 @@ def get_exceptions_and_heatmap(filters=None):
         print("⚠️ Exception query failed:", e)
         return None, None
 
-    # ... (Polars rate calculation and casting remains the same) ...
-
-    # Calculate Rates
+    # Calculate Rates in Polars (as before)
     df = df.with_columns([
         # Gross Sales = Net Sales + Discount
         (pl.col("sales") + pl.col("total_discount")).alias("gross_sales"),
@@ -363,8 +377,7 @@ def get_exceptions_and_heatmap(filters=None):
         pl.col("total_txns").cast(pl.Int64)
     )
 
-    # --- EXCEPTION SPIKE REPORT (Requires separate query or full base CTE) ---
-    # Fetch the original base data to get staff_id and daypart for spikes
+    # --- EXCEPTION SPIKE REPORT ---
     spike_query = f"""
         SELECT 
             dl.location, c.daypart, ds.staff_id, fs.voided, fs.refunded
@@ -378,12 +391,11 @@ def get_exceptions_and_heatmap(filters=None):
     """
     
     arrow_spikes = con.execute(spike_query).fetch_arrow_table()
+    
     if arrow_spikes.num_rows == 0:
-        con.close()
         return df, {"void_spikes": pl.DataFrame(), "refund_spikes": pl.DataFrame()}
     
     df_spikes = pl.from_arrow(arrow_spikes)
-    con.close()
 
     # Filter spikes in Polars
     void_spikes = df_spikes.filter(pl.col("voided"))
@@ -391,12 +403,19 @@ def get_exceptions_and_heatmap(filters=None):
     
     return df, {"void_spikes": void_spikes, "refund_spikes": refund_spikes}
 
+
 # ---------------------------
-# WoW Same-Store Sales Function (Unchanged)
+# WoW Same-Store Sales Function (FIXED)
 # ---------------------------
 
+@st.cache_data(show_spinner="Calculating WoW Sales...")
 def get_same_store_sales(filters=None):
-    con = duckdb.connect(DB_PATH)
+    # CRITICAL FIX: Get the cached in-memory connection
+    con = init_db_connection()
+    
+    # Check if fact_sales table exists
+    if 'fact_sales' not in con.execute("SHOW TABLES").fetch_column(0):
+        return pl.DataFrame({"location": [], "net_sales": [], "last_week_sales": [], "wow_change": []})
     
     # 1. Prepare Current Period Filters
     current_filters = filters or {}
@@ -411,20 +430,15 @@ def get_same_store_sales(filters=None):
     # Determine the date range for the current period
     date_range = current_filters.get("date_range")
     if not (date_range and len(date_range) == 2 and all(isinstance(d, date) for d in date_range)):
-        con.close()
         return pl.DataFrame({"location": [], "net_sales": [], "last_week_sales": [], "wow_change": []})
 
     start_date, end_date = date_range
 
     # 2. Prepare Last Week's Date Range
-    # Shift both start and end dates back by 7 days
     last_week_start = start_date - timedelta(days=7)
     last_week_end = end_date - timedelta(days=7)
     
     # Build a base WHERE clause for all filters except the date range
-    # We will manually inject the date range for the two periods
-    
-    # Create a temporary filter dict without date range
     base_filters_temp = {k: v for k, v in current_filters.items() if k != "date_range"}
     
     # Build a raw WHERE clause without the initial 'WHERE' keyword
@@ -486,5 +500,4 @@ def get_same_store_sales(filters=None):
         # Return an empty Polars DataFrame with expected columns
         df = pl.DataFrame({"location": [], "net_sales": [], "last_week_sales": [], "wow_change": []})
 
-    con.close()
     return df

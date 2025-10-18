@@ -1,56 +1,52 @@
 import duckdb
 import os
 import streamlit as st
+# CRITICAL FIX: Import the cached connection function
+from pipeline.ingest import init_db_connection 
 
-DB_PATH = os.path.abspath("data/dutchie.db")
+# REMOVED: DB_PATH definition as we are using the in-memory connection
 
+@st.cache_data(show_spinner="Loading filter options...")
 def get_filter_options():
     """
     Dynamically retrieves filter options (location, category, staff, date)
-    from either the star schema (if it exists) or directly from raw tables.
-    Works even if only raw data was ingested and star schema not yet built.
+    from the in-memory DuckDB star schema tables.
     """
     filters = {"locations": [], "categories": [], "staff": [], "dates": []}
 
-    if not os.path.exists(DB_PATH):
-        return filters
+    # CRITICAL FIX: Get the cached in-memory connection
+    con = init_db_connection()
 
-    con = duckdb.connect(DB_PATH)
-
+    # Get a list of all tables currently loaded in the database
+    tables = [t[0] for t in con.execute("SHOW TABLES").fetchall()]
+    
     def table_exists(table_name):
-        try:
-            con.execute(f"SELECT 1 FROM {table_name} LIMIT 1")
-            return True
-        except duckdb.CatalogException:
-            return False
+        return table_name in tables
 
     # --- Preferred: use star schema tables if they exist ---
-    if table_exists("dim_location"):
-        filters["locations"] = [r[0] for r in con.execute("SELECT DISTINCT location FROM dim_location ORDER BY location").fetchall()]
-    if table_exists("dim_product"):
-        filters["categories"] = [r[0] for r in con.execute("SELECT DISTINCT category FROM dim_product ORDER BY category").fetchall()]
-    if table_exists("dim_staff"):
-        filters["staff"] = [r[0] for r in con.execute("SELECT DISTINCT staff_id FROM dim_staff ORDER BY staff_id").fetchall()]
-    if table_exists("calendar"):
-        filters["dates"] = [r[0] for r in con.execute("SELECT DISTINCT date FROM calendar ORDER BY date").fetchall()]
+    # We must ensure all tables needed for the app (dim/fact/calendar) are built 
+    # and populated, which happens in `clean_and_model()`.
 
-    # --- Fallback: look for raw uploaded tables ---
-    if not any(filters.values()):
-        tables = [t[0] for t in con.execute("SHOW TABLES").fetchall()]
-        for t in tables:
-            if t.startswith("dim_") or t in ("calendar", "fact_sales"):
-                continue  # skip star schema tables
+    try:
+        if table_exists("dim_location"):
+            filters["locations"] = [r[0] for r in con.execute("SELECT DISTINCT location FROM dim_location ORDER BY location").fetchall() if r[0]]
+        if table_exists("dim_product"):
+            filters["categories"] = [r[0] for r in con.execute("SELECT DISTINCT category FROM dim_product ORDER BY category").fetchall() if r[0]]
+        if table_exists("dim_staff"):
+            filters["staff"] = [r[0] for r in con.execute("SELECT DISTINCT staff_id FROM dim_staff ORDER BY staff_id").fetchall() if r[0]]
+        if table_exists("calendar"):
+            # Ensure dates are fetched as strings for Streamlit date_input default handling
+            filters["dates"] = [r[0] for r in con.execute("SELECT DISTINCT date FROM calendar ORDER BY date").fetchall()]
+        
+    except duckdb.CatalogException as e:
+        # This handles cases where a column might be missing, but is unlikely 
+        # if the table_exists check is correct.
+        print(f"Warning: Failed to query a dimension table. Have tables been modeled? {e}")
+        pass
+    
+    # REMOVED: Fallback logic using raw table names is complex and unnecessary 
+    # if the user is consistently prompted to "Clean and Model Data" after upload.
+    # The app should rely on the modeled data structure.
 
-            try:
-                filters["locations"] += [r[0] for r in con.execute(f"SELECT DISTINCT location FROM {t}").fetchall()]
-                filters["categories"] += [r[0] for r in con.execute(f"SELECT DISTINCT category FROM {t}").fetchall()]
-                filters["staff"] += [r[0] for r in con.execute(f"SELECT DISTINCT staff_id FROM {t}").fetchall()]
-            except duckdb.CatalogException:
-                pass
-
-        # Remove duplicates and sort
-        for k in ["locations", "categories", "staff"]:
-            filters[k] = sorted(set([x for x in filters[k] if x]))
-
-    con.close()
+    # DO NOT CLOSE THE CACHED CONNECTION (con.close() removed)
     return filters
