@@ -58,12 +58,20 @@ st.header("1. Data Ingestion")
 uploads = st.file_uploader("Upload POS Export(s) (JSON or CSV)", type=["json", "csv"], accept_multiple_files=True)
 if uploads:
     for uploaded in uploads:
-        temp_path = os.path.join("data", uploaded.name)
-        with open(temp_path, "wb") as f:
-            f.write(uploaded.getbuffer())
+        # temp_path = os.path.join("data", uploaded.name)
+        # with open(temp_path, "wb") as f:
+        #     f.write(uploaded.getbuffer())
+        file_buffer = uploaded.getvalue()
+        file_type = uploaded.type.split('/')[-1] # Get 'json' or 'csv'
         table = uploaded.name.split(".")[0].lower()
-        msg = ingest_file(temp_path, table)
+        
+        # Pass the buffer, table name, and file type to the ingestion function
+        msg = ingest_file(file_buffer, table, file_type=file_type) 
         st.success(f"Uploaded & ingested: {uploaded.name}")
+
+        # table = uploaded.name.split(".")[0].lower()
+        # msg = ingest_file(temp_path, table)
+        # st.success(f"Uploaded & ingested: {uploaded.name}")
 
 if st.button("Clean and Model Data", key="clean_button"):
     st.info(clean_and_model())
