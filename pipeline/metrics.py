@@ -6,16 +6,16 @@ import streamlit as st
 # CRITICAL FIX: Import the cached connection function
 from pipeline.ingest import init_db_connection 
 
-# --- Dedicated Function to Get Filter Options for UI ---
+# --- Dedicated Function to Get Filter Options for UI (RENAMED) ---
 @st.cache_data(show_spinner=False)
-def get_distinct_filter_options():
+def get_filter_options(): # RENAMED from get_distinct_filter_options
     """
     Retrieves all distinct values for filter options (Location, Category, Staff) 
     from dimension tables for use in Streamlit sidebar widgets.
     """
     con = init_db_connection()
     if con is None:
-        return {"locations": [], "categories": [], "staff": []}
+        return {"locations": [], "categories": [], "staff": [], "dates": []} # Added dates for completeness
     
     # Check if modeled tables exist using the fixed fetchall() method
     try:
@@ -23,10 +23,10 @@ def get_distinct_filter_options():
         table_names = [row[0] for row in table_result]
         if 'dim_location' not in table_names:
             print("⚠️ Dimension tables not found. Data ingestion likely failed.")
-            return {"locations": [], "categories": [], "staff": []}
+            return {"locations": [], "categories": [], "staff": [], "dates": []}
     except Exception as e:
-        print(f"Error checking for tables in get_distinct_filter_options: {e}")
-        return {"locations": [], "categories": [], "staff": []}
+        print(f"Error checking for tables in get_filter_options: {e}")
+        return {"locations": [], "categories": [], "staff": [], "dates": []}
         
     try:
         # Fetch distinct values
@@ -39,14 +39,20 @@ def get_distinct_filter_options():
         staff = [
             r[0] for r in con.execute("SELECT DISTINCT staff_id FROM dim_staff").fetchall() if r[0]
         ]
+        # Fetch available dates
+        dates = [
+            r[0] for r in con.execute("SELECT DISTINCT date FROM calendar ORDER BY date").fetchall() if r[0]
+        ]
+
     except Exception as e:
         print(f"Error retrieving filter options from dimension tables: {e}")
-        return {"locations": [], "categories": [], "staff": []}
+        return {"locations": [], "categories": [], "staff": [], "dates": []}
     
     return {
         "locations": sorted(locations),
         "categories": sorted(categories),
-        "staff": sorted(staff)
+        "staff": sorted(staff),
+        "dates": dates, # Dates are already sorted
     }
 
 
@@ -56,8 +62,8 @@ def expand_all_filters(filters):
     This function no longer queries the database directly.
     """
     
-    # Get all available options (cached)
-    options = get_distinct_filter_options()
+    # Get all available options (cached) - UPDATED FUNCTION CALL
+    options = get_filter_options()
 
     # Apply expansion if 'ALL' is selected or the list is empty/None
     if "locations" in filters and ("ALL" in filters["locations"] or not filters["locations"]):
@@ -203,7 +209,8 @@ def get_kpis(filters=None):
             return None
 
         kpi_row = kpi_result.iloc[0]
-        total_sales_val = float(kpi_row["total_sales"] or 0)
+        # Ensure safe conversion to float, handling None/NaN
+        total_sales_val = float(kpi_row["total_sales"]) if kpi_row["total_sales"] is not None else 0.0
         
         # --- Tender Mix Calculation ---
         tender_query = f"""
@@ -490,7 +497,7 @@ def get_same_store_sales(filters=None):
     target_locations = current_filters.get("locations", [])
     if not target_locations:
          # Need to fetch all locations if filters are empty
-         all_options = get_distinct_filter_options()
+         all_options = get_filter_options()
          target_locations = all_options['locations']
 
     # Determine the date range for the current period

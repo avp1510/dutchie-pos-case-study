@@ -4,7 +4,8 @@ import plotly.express as px
 # Assume these are available in your pipeline folder
 from pipeline.ingest import ingest_file
 from pipeline.transform import clean_and_model
-from pipeline.metrics import get_kpis, get_exceptions_and_heatmap, get_same_store_sales
+# Note: The original code imports these but they are called inside the button clicks
+# from pipeline.metrics import get_kpis, get_exceptions_and_heatmap, get_same_store_sales
 from pipeline.filters import get_filter_options
 from pipeline.fetch import fetch_sales_json, save_json
 from pipeline.config import INTEGRATOR_KEY 
@@ -58,11 +59,9 @@ st.header("1. Data Ingestion")
 uploads = st.file_uploader("Upload POS Export(s) (JSON or CSV)", type=["json", "csv"], accept_multiple_files=True)
 if uploads:
     for uploaded in uploads:
-        # temp_path = os.path.join("data", uploaded.name)
-        # with open(temp_path, "wb") as f:
-        #     f.write(uploaded.getbuffer())
         file_buffer = uploaded.getvalue()
-        file_type = uploaded.type.split('/')[-1] # Get 'json' or 'csv'
+        # Determine file type from Streamlit's detection or fall back to name
+        file_type = uploaded.type.split('/')[-1] if uploaded.type else uploaded.name.split(".")[-1].lower() 
         
         table = uploaded.name.split(".")[0].lower()
         
@@ -70,9 +69,6 @@ if uploads:
         msg = ingest_file(file_buffer, table, file_type=file_type) 
         st.success(f"Uploaded & ingested: {uploaded.name}")
 
-        # table = uploaded.name.split(".")[0].lower()
-        # msg = ingest_file(temp_path, table)
-        # st.success(f"Uploaded & ingested: {uploaded.name}")
 
 if st.button("Clean and Model Data", key="clean_button"):
     st.info(clean_and_model())
@@ -92,17 +88,18 @@ try:
     # Order Type Filter (based on TENDER TYPE)
     order_type = st.sidebar.multiselect(
         "Order Type (Tender Type)",
-        ["CASH", "CARD", "ONLINE", "DEBIT", "CREDIT"], # Common Tender Types
+        ["CASH", "CARD", "ONLINE", "DEBIT", "CREDIT", "OTHER"], # Added "OTHER" as a common fallback
     )
     
     # Date Range Filter
     today = date.today()
     
     # Determine default date range: all available dates or just today
-    if options.get("dates") and len(options["dates"]) >= 2:
+    date_options = options.get("dates", [])
+    if date_options and len(date_options) >= 2:
         # Convert date strings from get_filter_options to date objects
-        start_date = datetime.strptime(options["dates"][0], '%Y-%m-%d').date()
-        end_date = datetime.strptime(options["dates"][-1], '%Y-%m-%d').date()
+        start_date = datetime.strptime(date_options[0], '%Y-%m-%d').date()
+        end_date = datetime.strptime(date_options[-1], '%Y-%m-%d').date()
         date_range_default = [start_date, end_date]
     else:
         # Fallback to a 7-day range ending today if no data is loaded
@@ -116,6 +113,7 @@ try:
     if isinstance(date_range, (list, tuple)) and len(date_range) == 1:
         date_range = [date_range[0], date_range[0]]
     elif not isinstance(date_range, (list, tuple)) or len(date_range) != 2:
+        # Fallback if the user cleared the date input or it's malformed
         date_range = [today, today]
 
     filters = {
@@ -129,11 +127,12 @@ try:
 
 except Exception:
     st.sidebar.info("Load & clean data first.")
+    # Default filters when data isn't ready
     filters = {
         "locations": ["ALL"], 
         "categories": ["ALL"], 
         "staff": ["ALL"], 
-        "daypart": ["All"],
+        "daypart": ["ALL"],
         "order_types": ["ALL"],
         "date_range": [date.today(), date.today()],
     }
@@ -185,6 +184,7 @@ if metrics:
     
     with colD:
         st.caption("Top 5 Active Promos (by Discount $)")
+        # Safely convert Polars DataFrame to Pandas
         df_promo = metrics["top_promos"].to_pandas() if hasattr(metrics["top_promos"], "to_pandas") else metrics["top_promos"]
         if not df_promo.empty:
             st.dataframe(
@@ -292,21 +292,20 @@ if metrics:
     else:
         st.info("No product performance data found for selected filters.")
 
-    st.divider() # Add a final divider before section 3.
+    st.divider() 
 # --- END NEW SECTION 2.5 ---
 
 # --- 3. Operational View ---
 st.header("3. Operational View")
 # Initialize heatmap key if not present
-if "heatmap" not in st.session_state:
-    st.session_state.heatmap = None
+if "heatmap_data" not in st.session_state:
+    st.session_state.heatmap_data = None
 
 if st.button("Exception & Heatmap View", key="heatmap_button"):
     from pipeline.metrics import get_exceptions_and_heatmap
     st.session_state.heatmap_data = get_exceptions_and_heatmap(filters)
-    # Changed key from 'heatmap' to 'heatmap_data' to better reflect content
 
-# ✅ FIX: Use .get() to safely read heatmap data
+# ✅ Use .get() to safely read heatmap data
 heatmap_result = st.session_state.get("heatmap_data")
 if heatmap_result:
     df_heatmap, spikes = heatmap_result # Unpack the tuple
@@ -339,6 +338,12 @@ if heatmap_result:
                 "<b>Store:</b> %{y}<br>"
                 "<b>Hour:</b> %{x}<br>"
                 "<b>Total Transactions:</b> %{z}<br>"
+                "<hr>"
+                "Sales: $%{customdata[0]:,.2f}<br>"
+                "Total Discount: $%{customdata[1]:,.2f}<br>"
+                "Discount Rate: %{customdata[2]:,.2f}%%<br>"
+                "Voids: %{customdata[3]:.0f}<br>"
+                "Refunds: %{customdata[4]:.0f}<br>"
             ),
             # customdata maps to hover_data:
             # 0: sales, 1: total_discount, 2: discount_rate, 3: voids, 4: refunds
@@ -354,21 +359,25 @@ if heatmap_result:
             void_spikes = spikes["void_spikes"].to_pandas() if hasattr(spikes["void_spikes"], "to_pandas") else spikes["void_spikes"]
             refund_spikes = spikes["refund_spikes"].to_pandas() if hasattr(spikes["refund_spikes"], "to_pandas") else spikes["refund_spikes"]
 
+            # Helper function to check for NaN in staff_id
+            def is_nan(value):
+                return (isinstance(value, float) and np.isnan(value)) or value is None
+                
             if not void_spikes.empty:
                 st.warning("⚠️ Voids Detected (Spikes)")
                 grouped = void_spikes.groupby(["location", "daypart", "staff_id"], dropna=False).size().reset_index(name="count")
                 for _, row in grouped.iterrows():
-                    # Check if staff_id is NaN (np.nan check)
-                    staff_display = row['staff_id'] if not (isinstance(row['staff_id'], float) and np.isnan(row['staff_id'])) else "N/A"
-                    st.write(f"• {row['location']} — {row['count']} void(s) during {row['daypart']} (Staff: {staff_display})")
+                    # Check if staff_id is NaN 
+                    staff_display = row['staff_id'] if not is_nan(row['staff_id']) else "N/A"
+                    st.write(f"• **{row['location']}** — {row['count']} void(s) during {row['daypart']} (Staff: **{staff_display}**)")
 
             if not refund_spikes.empty:
                 st.warning("⚠️ Refunds Detected (Spikes)")
                 grouped = refund_spikes.groupby(["location", "daypart", "staff_id"], dropna=False).size().reset_index(name="count")
                 for _, row in grouped.iterrows():
-                    # Check if staff_id is NaN (np.nan check)
-                    staff_display = row['staff_id'] if not (isinstance(row['staff_id'], float) and np.isnan(row['staff_id'])) else "N/A"
-                    st.write(f"• {row['location']} — {row['count']} refund(s) during {row['daypart']} (Staff: {staff_display})")
+                    # Check if staff_id is NaN 
+                    staff_display = row['staff_id'] if not is_nan(row['staff_id']) else "N/A"
+                    st.write(f"• **{row['location']}** — {row['count']} refund(s) during {row['daypart']} (Staff: **{staff_display}**)")
     else:
         st.warning("No data for heatmap.")
 
@@ -402,7 +411,12 @@ wow_filters["locations"] = [selected_wow_location]
 
 if st.button(f"Compute WoW Sales for {selected_wow_location}", key="wow_button"):
     from pipeline.metrics import get_same_store_sales
-    st.session_state.wow_metrics = get_same_store_sales(wow_filters)
+    # Ensure date range is valid for calculation
+    if len(wow_filters["date_range"]) == 2 and wow_filters["date_range"][1] > wow_filters["date_range"][0]:
+        st.session_state.wow_metrics = get_same_store_sales(wow_filters)
+    else:
+        st.error("Please select a valid date range (start date before end date) for WoW calculation.")
+
 
 wow_metrics = st.session_state.get("wow_metrics")
 
@@ -442,10 +456,13 @@ if wow_metrics is not None and not wow_metrics.is_empty():
         # Format the delta for display
         delta_val = f"{wow_change:,.2f} %" if not is_nan_or_none else "N/A"
         
+        # The delta parameter needs a raw number for coloring
+        delta_raw = wow_change if not is_nan_or_none else None
+
         colC.metric(
             "WoW % Change", 
             delta_val, 
-            delta=f"{wow_change:,.2f} %" if not is_nan_or_none else None,
+            delta=f"{delta_raw:,.2f} %" if delta_raw is not None else None,
             delta_color="normal"
         )
     else:
@@ -456,42 +473,56 @@ else:
 
 # --- 5. Manager Notes ---
 st.header("5. Manager Notes") 
-notes = st.session_state.get("manager_notes_text")
-notes = st.text_area("Notes for Today", placeholder="Add notes...", height=150, key="manager_notes_text")
+# Manager notes are stored in session state
+notes = st.text_area(
+    "Notes for Today", 
+    placeholder="Add notes about key findings, coaching opportunities, or actions taken...", 
+    height=150, 
+    key="manager_notes_text",
+    value=st.session_state.get("manager_notes_text", "")
+)
 
 def fig_to_png_bytes(fig, width=1000, height=600, scale=2):
+    """Converts a Plotly figure to PNG bytes for ReportLab."""
     buf = BytesIO()
     fig.write_image(buf, format="png", width=width, height=height, scale=scale)
     buf.seek(0)
     return buf
 
 def build_pdf(metrics, fig_category, fig_heatmap, notes, filters):
+    """Generates the PDF report using ReportLab."""
     buf = BytesIO()
     c = canvas.Canvas(buf, pagesize=LETTER)
     W, H = LETTER
     margin = 36
     y = H - margin
 
+    # --- Title and Date ---
     title = "Dutchie POS Manager Dashboard"
     date_str = datetime.now().strftime("%Y-%m-%d %H:%M")
     c.setFont("Helvetica-Bold", 14); c.drawString(margin, y, title)
     c.setFont("Helvetica", 10); c.drawRightString(W - margin, y, f"Generated: {date_str}")
     y -= 18
     
-    # Format filters for PDF
+    # --- Filters Summary ---
+    date_range = filters.get('date_range', [None, None])
+    start_date_str = date_range[0].strftime('%Y-%m-%d') if date_range[0] else 'N/A'
+    end_date_str = date_range[1].strftime('%Y-%m-%d') if date_range[1] else 'N/A'
+
     filt_txt_parts = [
-        f"Locations={filters.get('locations', [])}",
-        f"Categories={filters.get('categories', [])}",
-        f"Staff={filters.get('staff', [])}",
-        f"Daypart={filters.get('daypart', ['All'])[0]}",
-        f"Order Type={filters.get('order_types', ['All'])[0]}",
-        f"Date Range={filters.get('date_range', [None, None])[0].strftime('%Y-%m-%d')} to {filters.get('date_range', [None, None])[1].strftime('%Y-%m-%d')}"
+        f"Locations: {', '.join(filters.get('locations', ['ALL']))}",
+        f"Categories: {', '.join(filters.get('categories', ['ALL']))}",
+        f"Staff: {', '.join(filters.get('staff', ['ALL']))}",
+        f"Daypart: {', '.join(filters.get('daypart', ['ALL']))}",
+        f"Order Type: {', '.join(filters.get('order_types', ['ALL']))}",
+        f"Date Range: {start_date_str} to {end_date_str}"
     ]
     filt_txt = " | ".join(filt_txt_parts)
     
     c.setFont("Helvetica-Oblique", 9); c.drawString(margin, y, filt_txt[:120])
-    y -= 18
+    y -= 24 # More space after filters
 
+    # --- KPI Section ---
     c.setFont("Helvetica-Bold", 12); c.drawString(margin, y, "Key Performance Indicators")
     y -= 16; c.setFont("Helvetica", 11)
     kpi_lines = [
@@ -504,30 +535,60 @@ def build_pdf(metrics, fig_category, fig_heatmap, notes, filters):
         f"Void Rate: {metrics['void_rate']:.2f}%",
         f"Refund Rate: {metrics['refund_rate']:.2f}%",
     ]
-    for ln in kpi_lines:
-        c.drawString(margin, y, ln); y -= 14
+    # Draw KPIs in two columns for better use of space
+    col_width = W / 2 - margin * 1.5
+    for i, ln in enumerate(kpi_lines):
+        if i < 4:
+            c.drawString(margin, y, ln)
+        else:
+            c.drawString(margin + col_width, y, ln)
+        
+        if i % 2 == 0: # Move up for the next line
+            y -= 14
+    y += 14 * (len(kpi_lines) // 2) # Adjust y back to where the last line ended
+    
+    y -= 14
 
-    # Add Tender Mix data to PDF
+    # --- WoW Sales Summary ---
+    if st.session_state.get("wow_metrics") is not None and not st.session_state["wow_metrics"].is_empty():
+        y -= 8
+        c.setFont("Helvetica-Bold", 12); c.drawString(margin, y, "WoW Sales Comparison")
+        y -= 12
+        wow_df = st.session_state["wow_metrics"].to_pandas().iloc[0]
+        wow_change = wow_df['wow_change']
+        
+        is_nan_wow = (wow_change is None) or (isinstance(wow_change, float) and np.isnan(wow_change))
+        wow_change_str = f"{wow_change:,.2f} %" if not is_nan_wow else "N/A"
+        
+        c.setFont("Helvetica", 10)
+        c.drawString(margin, y, f"Location: {wow_df['location']}")
+        c.drawString(margin + col_width, y, f"Net Sales: ${wow_df['net_sales']:.2f}")
+        y -= 12
+        c.drawString(margin, y, f"Last Week Sales: ${wow_df['last_week_sales']:.2f}")
+        c.drawString(margin + col_width, y, f"WoW Change: {wow_change_str}")
+        y -= 12
     y -= 8
+    
+    # --- Tender Mix Summary ---
     c.setFont("Helvetica-Bold", 12); c.drawString(margin, y, "Tender Mix (Top 5)")
     y -= 12
     tender_df = metrics.get('tender_mix')
     if tender_df is not None and not tender_df.is_empty():
-        # Get top 5 tenders for brevity in PDF
-        top_tenders = tender_df.head(5).to_pandas()
+        top_tenders = tender_df.sort("tender_sales", descending=True).head(5).to_pandas()
         for _, row in top_tenders.iterrows():
-            line = f"{row['tender_type']}: ${row['tender_sales']:.2f} ({row['tender_percentage']:.2f}%)"
+            # Calculate percentage for display if not already available
+            total_sales = metrics['total_sales']
+            percentage = (row['tender_sales'] / total_sales) * 100 if total_sales else 0
+            line = f"{row['tender_type']}: ${row['tender_sales']:.2f} ({percentage:.2f}%)"
             c.setFont("Helvetica", 10)
             c.drawString(margin, y, line); y -= 12
-        y -= 8 # Extra space after table
+        y -= 8 
 
-    # Add Product Movers summary (Space permitting)
-    y -= 8
+    # --- Product Movers Summary ---
     c.setFont("Helvetica-Bold", 12); c.drawString(margin, y, "Product Performance Summary")
     y -= 12
     movers_df = metrics.get('product_movers')
     if movers_df is not None and not movers_df.is_empty():
-        # Get top product by sales and top by quantity
         top_sales_product = movers_df.sort("net_sales", descending=True).head(1).to_pandas().iloc[0]
         top_qty_product = movers_df.sort("quantity_sold", descending=True).head(1).to_pandas().iloc[0]
         
@@ -541,30 +602,36 @@ def build_pdf(metrics, fig_category, fig_heatmap, notes, filters):
         y -= 12
     y -= 8
         
-    if st.session_state.get("fig_category"):
-        y -= 8
-        c.setFont("Helvetica-Bold", 12); c.drawString(margin, y, "Category Sales")
-        y -= 12
-        img = ImageReader(fig_to_png_bytes(st.session_state["fig_category"]))
-        # Check if we have room for the chart, otherwise start a new page
-        if y < 380: c.showPage(); y = H - margin - 12
-        c.drawImage(img, margin, y - 320, width=540, height=320, preserveAspectRatio=True)
-        y -= 340
-
-    if st.session_state.get("fig_heatmap"):
+    # --- Category Chart ---
+    if fig_category:
         if y < 380: c.showPage(); y = H - margin
-        c.setFont("Helvetica-Bold", 12); c.drawString(margin, y, "Sales Heatmap")
+        c.setFont("Helvetica-Bold", 12); c.drawString(margin, y, "Category Sales Distribution")
         y -= 12
-        img = ImageReader(fig_to_png_bytes(st.session_state["fig_heatmap"]))
-        c.drawImage(img, margin, y - 320, width=540, height=320, preserveAspectRatio=True)
-        y -= 340
+        img = ImageReader(fig_to_png_bytes(fig_category))
+        c.drawImage(img, margin, y - 250, width=540, height=250, preserveAspectRatio=True) # Smaller size for better fit
+        y -= 260
+        
+    # --- Heatmap Chart ---
+    if fig_heatmap:
+        if y < 380: c.showPage(); y = H - margin
+        c.setFont("Helvetica-Bold", 12); c.drawString(margin, y, "Sales Throughput Heatmap")
+        y -= 12
+        img = ImageReader(fig_to_png_bytes(fig_heatmap))
+        c.drawImage(img, margin, y - 250, width=540, height=250, preserveAspectRatio=True) # Smaller size for better fit
+        y -= 260
 
+    # --- Manager Notes ---
     if notes:
         if y < 120: c.showPage(); y = H - margin
         c.setFont("Helvetica-Bold", 12); c.drawString(margin, y, "Manager Notes")
         y -= 14; c.setFont("Helvetica", 10)
-        for line in wrap(notes, width=95):
-            c.drawString(margin, y, line); y -= 12
+        # Use a smaller wrap width for PDF readability
+        for line in wrap(notes, width=90): 
+            c.drawString(margin, y, line)
+            y -= 12
+            if y < margin:
+                c.showPage()
+                y = H - margin
 
     c.showPage(); c.save()
     buf.seek(0)
@@ -573,18 +640,26 @@ def build_pdf(metrics, fig_category, fig_heatmap, notes, filters):
 st.divider()
 if st.button("📄 Export Dashboard to PDF", type="primary"):
     if not st.session_state.get("metrics"):
-        st.error("Compute KPIs first.")
+        st.error("Please compute the Key Performance Indicators first before exporting.")
     else:
+        # Check if figures are available for cleaner PDF generation
+        fig_cat = st.session_state.get("fig_category")
+        fig_heat = st.session_state.get("fig_heatmap")
+        
+        # Give a warning if a key section is missing (e.g., if heatmap button wasn't pressed)
+        if not fig_heat:
+             st.warning("Note: Heatmap not computed. It will be excluded from the PDF.")
+
         pdf_buf = build_pdf(
             metrics=st.session_state["metrics"],
-            fig_category=st.session_state.get("fig_category"),
-            fig_heatmap=st.session_state.get("fig_heatmap"),
+            fig_category=fig_cat,
+            fig_heatmap=fig_heat,
             notes=st.session_state.get("manager_notes_text", ""),
             filters=filters,
         )
-        fname = f"dashboard_report_{datetime.now().strftime('%Y-%m-%d')}.pdf"
+        fname = f"dutchie_dashboard_report_{datetime.now().strftime('%Y-%m-%d')}.pdf"
         st.download_button(
-            label="Download PDF",
+            label="✅ Download PDF Report",
             data=pdf_buf,
             file_name=fname,
             mime="application/pdf",
