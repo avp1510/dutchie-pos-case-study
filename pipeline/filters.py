@@ -11,7 +11,9 @@ def get_filter_options():
     """
     Dynamically retrieves filter options (location, category, staff, date)
     from the in-memory DuckDB star schema tables.
+
     """
+    st.cache_data.clear()
     filters = {"locations": [], "categories": [], "staff": [], "dates": []}
 
     # CRITICAL FIX: Get the cached in-memory connection
