@@ -13,6 +13,12 @@ def expand_all_filters(filters):
     """Replace 'ALL' or empty filters with all distinct values from DB."""
     # CRITICAL FIX: Get the cached in-memory connection
     con = init_db_connection()
+    
+    # 🌟 NEW DEFENSIVE CHECK 🌟
+    if con is None:
+        print("⚠️ DuckDB connection is None. Cannot expand filters.")
+        return filters
+
     try:
         # Check if modeled tables exist before querying
         if 'dim_location' not in con.execute("SHOW TABLES").fetch_column(0):
@@ -84,9 +90,14 @@ def get_kpis(filters=None):
     # CRITICAL FIX: Get the cached in-memory connection
     con = init_db_connection()
     
+    # 🌟 NEW DEFENSIVE CHECK 🌟
+    if con is None:
+        print("⚠️ DuckDB connection is None. Cannot compute KPIs.")
+        return None
+    
     # Check if fact_sales table exists
     if 'fact_sales' not in con.execute("SHOW TABLES").fetch_column(0):
-        # Return a dictionary of zero/empty values if data doesn't exist
+        # Return None if data doesn't exist
         return None
 
     filters = filters or {}
@@ -290,6 +301,11 @@ def get_exceptions_and_heatmap(filters=None):
     # CRITICAL FIX: Get the cached in-memory connection
     con = init_db_connection()
     
+    # 🌟 NEW DEFENSIVE CHECK 🌟
+    if con is None:
+        print("⚠️ DuckDB connection is None. Cannot compute exceptions/heatmap.")
+        return None, None
+    
     # Check if fact_sales table exists
     if 'fact_sales' not in con.execute("SHOW TABLES").fetch_column(0):
         return None, None
@@ -412,6 +428,11 @@ def get_exceptions_and_heatmap(filters=None):
 def get_same_store_sales(filters=None):
     # CRITICAL FIX: Get the cached in-memory connection
     con = init_db_connection()
+    
+    # 🌟 NEW DEFENSIVE CHECK 🌟
+    if con is None:
+        print("⚠️ DuckDB connection is None. Cannot compute WoW sales.")
+        return pl.DataFrame({"location": [], "net_sales": [], "last_week_sales": [], "wow_change": []})
     
     # Check if fact_sales table exists
     if 'fact_sales' not in con.execute("SHOW TABLES").fetch_column(0):
