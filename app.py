@@ -99,7 +99,7 @@ try:
     if date_options and len(date_options) >= 2:
         # Convert date strings from get_filter_options to date objects
         start_date = datetime.strptime(date_options[0], '%Y-%m-%d').date()
-        end_date = datetime.strptime(date_options[-1], '%Y-%m-%d').date()
+        end_date = datetime.strptime(date_options[-1], '%Y-%m-d').date()
         date_range_default = [start_date, end_date]
     else:
         # Fallback to a 7-day range ending today if no data is loaded
@@ -136,6 +136,7 @@ except Exception:
         "order_types": ["ALL"],
         "date_range": [date.today(), date.today()],
     }
+    options = {"locations": ["ALL"]} # Define options as empty fallback
 
 # --- 2. KPIs ---
 st.header("2. Key Performance Indicators")
@@ -379,7 +380,7 @@ if heatmap_result:
 # --- 4. Sales Trends (WoW Same-Store Sales) ---
 st.header("4. Sales Trends (Week-over-Week)")
 
-# Get available locations for the toggle, or default to all filter locations
+# Get available locations for the WoW comparison. Use ALL available from options.
 try:
     available_locations = get_filter_options()["locations"]
 except Exception:
@@ -388,22 +389,19 @@ except Exception:
 if not available_locations:
     available_locations = ["Columbus", "Cincinnati"] # Fallback if DB is empty
 
-# Location toggle for WoW comparison
-selected_wow_location = st.selectbox(
-    "Select Location for Same-Store WoW Analysis",
-    available_locations,
-    key="wow_location_select"
-)
+# 🟢 CHANGE 1: Removed st.selectbox for location
 
 # Initialize WoW metrics key
 if "wow_metrics" not in st.session_state:
     st.session_state.wow_metrics = None
 
-# Create a modified filter for the WoW calculation (only one location)
+# 🟢 CHANGE 2: Create a modified filter for the WoW calculation to include ALL available locations
 wow_filters = filters.copy()
-wow_filters["locations"] = [selected_wow_location]
+# Use all available locations from the DB, regardless of what's selected in the sidebar
+wow_filters["locations"] = available_locations 
 
-if st.button(f"Compute WoW Sales for {selected_wow_location}", key="wow_button"):
+# 🟢 CHANGE 3: Update button label
+if st.button(f"Compute All Store WoW Sales", key="wow_button"):
     from pipeline.metrics import get_same_store_sales
     # Ensure date range is valid for calculation
     if len(wow_filters["date_range"]) == 2 and wow_filters["date_range"][1] > wow_filters["date_range"][0]:
@@ -416,53 +414,58 @@ wow_metrics = st.session_state.get("wow_metrics")
 
 if wow_metrics is not None and not wow_metrics.is_empty():
     
-    # Filter the Polars DataFrame for the selected location (optional, since the query already filtered)
-    location_row_df = wow_metrics.filter(pl.col("location") == selected_wow_location).to_pandas()
-    
-    if not location_row_df.empty:
-        location_row = location_row_df.iloc[0]
+    # Get the date range for display labels
+    start_date = wow_filters["date_range"][0]
+    end_date = wow_filters["date_range"][1]
+    last_week_start = start_date - timedelta(days=7)
+    last_week_end = end_date - timedelta(days=7)
+
+    st.subheader(f"WoW Comparison: {start_date} to {end_date} vs. {last_week_start} to {last_week_end}")
+
+    # 🟢 CHANGE 4: Iterate through all rows (locations) in the result
+    wow_df_list = wow_metrics.to_pandas().to_dict('records')
+
+    for location_row in wow_df_list:
+        location_name = location_row['location']
         sales = location_row['net_sales']
         last_week_sales = location_row['last_week_sales']
         wow_change = location_row['wow_change']
 
-        # Determine the range for display
-        start_date = wow_filters["date_range"][0]
-        end_date = wow_filters["date_range"][1]
-        
-        last_week_start = start_date - timedelta(days=7)
-        last_week_end = end_date - timedelta(days=7)
-
+        st.markdown(f"**{location_name}**")
         colA, colB, colC = st.columns(3)
         
-        colA.metric(
-            f"Net Sales ({start_date} to {end_date})", 
-            f"$ {sales:,.2f}"
-        )
+        with colA:
+            colA.metric(
+                "Current Net Sales", 
+                f"$ {sales:,.2f}"
+            )
         
-        colB.metric(
-            f"Last Week Net Sales ({last_week_start} to {last_week_end})", 
-            f"$ {last_week_sales:,.2f}"
-        )
+        with colB:
+            colB.metric(
+                "Last Week Net Sales", 
+                f"$ {last_week_sales:,.2f}"
+            )
         
-        # --- FIXED LINE: Use numpy.isnan() to check for NaN (missing) values ---
-        is_nan_or_none = (wow_change is None) or (isinstance(wow_change, float) and np.isnan(wow_change))
+        with colC:
+            # --- FIXED LINE: Use numpy.isnan() to check for NaN (missing) values ---
+            is_nan_or_none = (wow_change is None) or (isinstance(wow_change, float) and np.isnan(wow_change))
 
-        # Format the delta for display
-        delta_val = f"{wow_change:,.2f} %" if not is_nan_or_none else "N/A"
-        
-        # The delta parameter needs a raw number for coloring
-        delta_raw = wow_change if not is_nan_or_none else None
+            # Format the delta for display
+            delta_val = f"{wow_change:,.2f} %" if not is_nan_or_none else "N/A"
+            
+            # The delta parameter needs a raw number for coloring
+            delta_raw = wow_change if not is_nan_or_none else None
 
-        colC.metric(
-            "WoW % Change", 
-            delta_val, 
-            delta=f"{delta_raw:,.2f} %" if delta_raw is not None else None,
-            delta_color="normal"
-        )
-    else:
-        st.info(f"No sales data found for {selected_wow_location} in the selected date range and filters.")
+            colC.metric(
+                "WoW % Change", 
+                delta_val, 
+                delta=f"{delta_raw:,.2f} %" if delta_raw is not None else None,
+                delta_color="normal"
+            )
+        st.divider() # Separate each location's metrics
+    
 else:
-    st.info("Click the 'Compute WoW Sales' button above to see the comparison.")
+    st.info("Click the 'Compute All Store WoW Sales' button above to see the comparison for all locations.")
 
 
 # --- 5. Manager Notes ---
@@ -543,25 +546,36 @@ def build_pdf(metrics, fig_category, fig_heatmap, notes, filters):
     
     y -= 14
 
-    # --- WoW Sales Summary ---
+    # --- WoW Sales Summary (Updated to handle multiple locations) ---
     if st.session_state.get("wow_metrics") is not None and not st.session_state["wow_metrics"].is_empty():
         y -= 8
-        c.setFont("Helvetica-Bold", 12); c.drawString(margin, y, "WoW Sales Comparison")
+        c.setFont("Helvetica-Bold", 12); c.drawString(margin, y, "WoW Sales Comparison (All Locations)")
         y -= 12
-        wow_df = st.session_state["wow_metrics"].to_pandas().iloc[0]
-        wow_change = wow_df['wow_change']
         
-        is_nan_wow = (wow_change is None) or (isinstance(wow_change, float) and np.isnan(wow_change))
-        wow_change_str = f"{wow_change:,.2f} %" if not is_nan_wow else "N/A"
-        
-        c.setFont("Helvetica", 10)
-        c.drawString(margin, y, f"Location: {wow_df['location']}")
-        c.drawString(margin + col_width, y, f"Net Sales: ${wow_df['net_sales']:.2f}")
-        y -= 12
-        c.drawString(margin, y, f"Last Week Sales: ${wow_df['last_week_sales']:.2f}")
-        c.drawString(margin + col_width, y, f"WoW Change: {wow_change_str}")
-        y -= 12
-    y -= 8
+        # Iterate over all WoW results
+        for index, wow_df in st.session_state["wow_metrics"].to_pandas().iterrows():
+            wow_change = wow_df['wow_change']
+            
+            is_nan_wow = (wow_change is None) or (isinstance(wow_change, float) and np.isnan(wow_change))
+            wow_change_str = f"{wow_change:,.2f} %" if not is_nan_wow else "N/A"
+            
+            c.setFont("Helvetica-Bold", 10)
+            c.drawString(margin, y, f"Location: {wow_df['location']}")
+            y -= 12
+            
+            c.setFont("Helvetica", 10)
+            c.drawString(margin, y, f"Current Net Sales: ${wow_df['net_sales']:.2f}")
+            c.drawString(margin + col_width, y, f"Last Week Sales: ${wow_df['last_week_sales']:.2f}")
+            y -= 12
+            c.drawString(margin, y, f"WoW Change: {wow_change_str}")
+            y -= 12
+            
+            if y < margin + 60: # Check if a page break is needed
+                c.showPage(); y = H - margin
+            else:
+                y -= 8 # Extra space between locations
+
+        y -= 8
     
     # --- Tender Mix Summary ---
     c.setFont("Helvetica-Bold", 12); c.drawString(margin, y, "Tender Mix (Top 5)")
