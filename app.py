@@ -631,30 +631,30 @@ def build_pdf(metrics, fig_category, fig_heatmap, notes, filters):
     buf.seek(0)
     return buf
 
-st.divider()
-if st.button("📄 Export Dashboard to PDF", type="primary"):
-    if not st.session_state.get("metrics"):
-        st.error("Please compute the Key Performance Indicators first before exporting.")
-    else:
-        # Check if figures are available for cleaner PDF generation
-        fig_cat = st.session_state.get("fig_category")
-        fig_heat = st.session_state.get("fig_heatmap")
+# st.divider()
+# if st.button("📄 Export Dashboard to PDF", type="primary"):
+#     if not st.session_state.get("metrics"):
+#         st.error("Please compute the Key Performance Indicators first before exporting.")
+#     else:
+#         # Check if figures are available for cleaner PDF generation
+#         fig_cat = st.session_state.get("fig_category")
+#         fig_heat = st.session_state.get("fig_heatmap")
         
-        # Give a warning if a key section is missing (e.g., if heatmap button wasn't pressed)
-        if not fig_heat:
-             st.warning("Note: Heatmap not computed. It will be excluded from the PDF.")
+#         # Give a warning if a key section is missing (e.g., if heatmap button wasn't pressed)
+#         if not fig_heat:
+#              st.warning("Note: Heatmap not computed. It will be excluded from the PDF.")
 
-        pdf_buf = build_pdf(
-            metrics=st.session_state["metrics"],
-            fig_category=fig_cat,
-            fig_heatmap=fig_heat,
-            notes=st.session_state.get("manager_notes_text", ""),
-            filters=filters,
-        )
-        fname = f"dutchie_dashboard_report_{datetime.now().strftime('%Y-%m-%d')}.pdf"
-        st.download_button(
-            label="✅ Download PDF Report",
-            data=pdf_buf,
-            file_name=fname,
-            mime="application/pdf",
-        )
+#         pdf_buf = build_pdf(
+#             metrics=st.session_state["metrics"],
+#             fig_category=fig_cat,
+#             fig_heatmap=fig_heat,
+#             notes=st.session_state.get("manager_notes_text", ""),
+#             filters=filters,
+#         )
+#         fname = f"dutchie_dashboard_report_{datetime.now().strftime('%Y-%m-%d')}.pdf"
+#         st.download_button(
+#             label="✅ Download PDF Report",
+#             data=pdf_buf,
+#             file_name=fname,
+#             mime="application/pdf",
+#         )
