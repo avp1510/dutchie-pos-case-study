@@ -6,47 +6,69 @@ import streamlit as st
 # CRITICAL FIX: Import the cached connection function
 from pipeline.ingest import init_db_connection 
 
-# REMOVED: DB_PATH and disk-based connection logic
-
-# --- Helper functions (FIXED for In-Memory DB) ---
-def expand_all_filters(filters):
-    """Replace 'ALL' or empty filters with all distinct values from DB."""
-    # CRITICAL FIX: Get the cached in-memory connection
+# --- Dedicated Function to Get Filter Options for UI ---
+@st.cache_data(show_spinner=False)
+def get_distinct_filter_options():
+    """
+    Retrieves all distinct values for filter options (Location, Category, Staff) 
+    from dimension tables for use in Streamlit sidebar widgets.
+    """
     con = init_db_connection()
-    
-    # 🌟 NEW DEFENSIVE CHECK 🌟
     if con is None:
-        print("⚠️ DuckDB connection is None. Cannot expand filters.")
-        return filters
-
+        return {"locations": [], "categories": [], "staff": []}
+    
+    # Check if modeled tables exist using the fixed fetchall() method
     try:
-        # Check if modeled tables exist before querying
-        # FIX: Replaced .fetch_column(0) with .fetchall()
         table_result = con.execute("SHOW TABLES").fetchall()
         table_names = [row[0] for row in table_result]
-        
         if 'dim_location' not in table_names:
-            return filters # Return as is if tables aren't modeled yet
-
-        if "locations" in filters and ("ALL" in filters["locations"] or not filters["locations"]):
-            filters["locations"] = [
-                r[0] for r in con.execute("SELECT DISTINCT location FROM dim_location").fetchall() if r[0]
-            ]
-        if "categories" in filters and ("ALL" in filters["categories"] or not filters["categories"]):
-            filters["categories"] = [
-                r[0] for r in con.execute("SELECT DISTINCT category FROM dim_product").fetchall() if r[0]
-            ]
-        if "staff" in filters and ("ALL" in filters["staff"] or not filters["staff"]):
-            filters["staff"] = [
-                r[0] for r in con.execute("SELECT DISTINCT staff_id FROM dim_staff").fetchall() if r[0]
-            ]
-    except duckdb.CatalogException as e:
-        print(f"Warning in expand_all_filters: {e}")
+            print("⚠️ Dimension tables not found. Data ingestion likely failed.")
+            return {"locations": [], "categories": [], "staff": []}
     except Exception as e:
-        # Catch generic error from DuckDB execution if table checking fails
-        print(f"Error checking for tables in expand_all_filters: {e}")
+        print(f"Error checking for tables in get_distinct_filter_options: {e}")
+        return {"locations": [], "categories": [], "staff": []}
+        
+    try:
+        # Fetch distinct values
+        locations = [
+            r[0] for r in con.execute("SELECT DISTINCT location FROM dim_location").fetchall() if r[0]
+        ]
+        categories = [
+            r[0] for r in con.execute("SELECT DISTINCT category FROM dim_product").fetchall() if r[0]
+        ]
+        staff = [
+            r[0] for r in con.execute("SELECT DISTINCT staff_id FROM dim_staff").fetchall() if r[0]
+        ]
+    except Exception as e:
+        print(f"Error retrieving filter options from dimension tables: {e}")
+        return {"locations": [], "categories": [], "staff": []}
     
-    # DO NOT CLOSE THE CACHED CONNECTION (con.close() removed)
+    return {
+        "locations": sorted(locations),
+        "categories": sorted(categories),
+        "staff": sorted(staff)
+    }
+
+
+def expand_all_filters(filters):
+    """
+    Replace 'ALL' or empty filters with all distinct values using cached options.
+    This function no longer queries the database directly.
+    """
+    
+    # Get all available options (cached)
+    options = get_distinct_filter_options()
+
+    # Apply expansion if 'ALL' is selected or the list is empty/None
+    if "locations" in filters and ("ALL" in filters["locations"] or not filters["locations"]):
+        filters["locations"] = options["locations"]
+        
+    if "categories" in filters and ("ALL" in filters["categories"] or not filters["categories"]):
+        filters["categories"] = options["categories"]
+        
+    if "staff" in filters and ("ALL" in filters["staff"] or not filters["staff"]):
+        filters["staff"] = options["staff"]
+        
     return filters
 
 def build_where_clause(filters):
@@ -97,13 +119,11 @@ def get_kpis(filters=None):
     # CRITICAL FIX: Get the cached in-memory connection
     con = init_db_connection()
     
-    # 🌟 NEW DEFENSIVE CHECK 🌟
     if con is None:
         print("⚠️ DuckDB connection is None. Cannot compute KPIs.")
         return None
     
     # Check if fact_sales table exists
-    # FIX: Replaced .fetch_column(0) with .fetchall()
     try:
         table_result = con.execute("SHOW TABLES").fetchall()
         table_names = [row[0] for row in table_result]
@@ -314,13 +334,11 @@ def get_exceptions_and_heatmap(filters=None):
     # CRITICAL FIX: Get the cached in-memory connection
     con = init_db_connection()
     
-    # 🌟 NEW DEFENSIVE CHECK 🌟
     if con is None:
         print("⚠️ DuckDB connection is None. Cannot compute exceptions/heatmap.")
         return None, None
     
     # Check if fact_sales table exists
-    # FIX: Replaced .fetch_column(0) with .fetchall()
     try:
         table_result = con.execute("SHOW TABLES").fetchall()
         table_names = [row[0] for row in table_result]
@@ -449,13 +467,11 @@ def get_same_store_sales(filters=None):
     # CRITICAL FIX: Get the cached in-memory connection
     con = init_db_connection()
     
-    # 🌟 NEW DEFENSIVE CHECK 🌟
     if con is None:
         print("⚠️ DuckDB connection is None. Cannot compute WoW sales.")
         return pl.DataFrame({"location": [], "net_sales": [], "last_week_sales": [], "wow_change": []})
     
     # Check if fact_sales table exists
-    # FIX: Replaced .fetch_column(0) with .fetchall()
     try:
         table_result = con.execute("SHOW TABLES").fetchall()
         table_names = [row[0] for row in table_result]
@@ -473,7 +489,9 @@ def get_same_store_sales(filters=None):
     # Use only the specified location for Same-Store calculation
     target_locations = current_filters.get("locations", [])
     if not target_locations:
-         target_locations = [r[0] for r in con.execute("SELECT DISTINCT location FROM dim_location").fetchall() if r[0]]
+         # Need to fetch all locations if filters are empty
+         all_options = get_distinct_filter_options()
+         target_locations = all_options['locations']
 
     # Determine the date range for the current period
     date_range = current_filters.get("date_range")
