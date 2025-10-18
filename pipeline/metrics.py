@@ -21,7 +21,11 @@ def expand_all_filters(filters):
 
     try:
         # Check if modeled tables exist before querying
-        if 'dim_location' not in con.execute("SHOW TABLES").fetch_column(0):
+        # FIX: Replaced .fetch_column(0) with .fetchall()
+        table_result = con.execute("SHOW TABLES").fetchall()
+        table_names = [row[0] for row in table_result]
+        
+        if 'dim_location' not in table_names:
             return filters # Return as is if tables aren't modeled yet
 
         if "locations" in filters and ("ALL" in filters["locations"] or not filters["locations"]):
@@ -38,6 +42,9 @@ def expand_all_filters(filters):
             ]
     except duckdb.CatalogException as e:
         print(f"Warning in expand_all_filters: {e}")
+    except Exception as e:
+        # Catch generic error from DuckDB execution if table checking fails
+        print(f"Error checking for tables in expand_all_filters: {e}")
     
     # DO NOT CLOSE THE CACHED CONNECTION (con.close() removed)
     return filters
@@ -96,8 +103,14 @@ def get_kpis(filters=None):
         return None
     
     # Check if fact_sales table exists
-    if 'fact_sales' not in con.execute("SHOW TABLES").fetch_column(0):
-        # Return None if data doesn't exist
+    # FIX: Replaced .fetch_column(0) with .fetchall()
+    try:
+        table_result = con.execute("SHOW TABLES").fetchall()
+        table_names = [row[0] for row in table_result]
+        if 'fact_sales' not in table_names:
+            return None
+    except Exception as e:
+        print(f"Error checking for tables in get_kpis: {e}")
         return None
 
     filters = filters or {}
@@ -307,7 +320,14 @@ def get_exceptions_and_heatmap(filters=None):
         return None, None
     
     # Check if fact_sales table exists
-    if 'fact_sales' not in con.execute("SHOW TABLES").fetch_column(0):
+    # FIX: Replaced .fetch_column(0) with .fetchall()
+    try:
+        table_result = con.execute("SHOW TABLES").fetchall()
+        table_names = [row[0] for row in table_result]
+        if 'fact_sales' not in table_names:
+            return None, None
+    except Exception as e:
+        print(f"Error checking for tables in get_exceptions_and_heatmap: {e}")
         return None, None
 
     filters = expand_all_filters(filters)
@@ -340,7 +360,7 @@ def get_exceptions_and_heatmap(filters=None):
                     b.location,
                     b.hour,
                     -- Count non-voided/non-refunded items as transactions (approximate ticket count)
-                    SUM(CASE WHEN b.voided = FALSE AND b.refunded = FALSE THEN 1 ELSE 0 END) AS total_txns,
+                    COUNT(DISTINCT b.sale_id) AS total_txns,
                     SUM(CASE WHEN b.voided = TRUE THEN 1 ELSE 0 END) AS voids,
                     SUM(CASE WHEN b.refunded = TRUE THEN 1 ELSE 0 END) AS refunds,
                     SUM(b.discount) AS total_discount,
@@ -435,7 +455,14 @@ def get_same_store_sales(filters=None):
         return pl.DataFrame({"location": [], "net_sales": [], "last_week_sales": [], "wow_change": []})
     
     # Check if fact_sales table exists
-    if 'fact_sales' not in con.execute("SHOW TABLES").fetch_column(0):
+    # FIX: Replaced .fetch_column(0) with .fetchall()
+    try:
+        table_result = con.execute("SHOW TABLES").fetchall()
+        table_names = [row[0] for row in table_result]
+        if 'fact_sales' not in table_names:
+            return pl.DataFrame({"location": [], "net_sales": [], "last_week_sales": [], "wow_change": []})
+    except Exception as e:
+        print(f"Error checking for tables in get_same_store_sales: {e}")
         return pl.DataFrame({"location": [], "net_sales": [], "last_week_sales": [], "wow_change": []})
     
     # 1. Prepare Current Period Filters
