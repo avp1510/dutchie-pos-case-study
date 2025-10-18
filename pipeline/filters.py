@@ -1,5 +1,6 @@
 import duckdb
 import os
+import streamlit as st
 
 DB_PATH = os.path.abspath("data/dutchie.db")
 

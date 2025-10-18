@@ -63,6 +63,7 @@ if uploads:
         #     f.write(uploaded.getbuffer())
         file_buffer = uploaded.getvalue()
         file_type = uploaded.type.split('/')[-1] # Get 'json' or 'csv'
+        
         table = uploaded.name.split(".")[0].lower()
         
         # Pass the buffer, table name, and file type to the ingestion function

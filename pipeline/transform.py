@@ -2,7 +2,7 @@ import polars as pl
 import duckdb
 import os
 import re
-
+import streamlit as st
 # Define the absolute path to the DuckDB file
 DB_PATH = os.path.abspath("data/dutchie.db")
 

@@ -2,7 +2,7 @@ import duckdb
 import polars as pl
 import os
 from datetime import date, timedelta
-
+import streamlit as st
 DB_PATH = os.path.abspath("data/dutchie.db")
 
 # ---------------------------
