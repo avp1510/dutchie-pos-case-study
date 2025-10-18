@@ -338,12 +338,6 @@ if heatmap_result:
                 "<b>Store:</b> %{y}<br>"
                 "<b>Hour:</b> %{x}<br>"
                 "<b>Total Transactions:</b> %{z}<br>"
-                "<hr>"
-                "Sales: $%{customdata[0]:,.2f}<br>"
-                "Total Discount: $%{customdata[1]:,.2f}<br>"
-                "Discount Rate: %{customdata[2]:,.2f}%%<br>"
-                "Voids: %{customdata[3]:.0f}<br>"
-                "Refunds: %{customdata[4]:.0f}<br>"
             ),
             # customdata maps to hover_data:
             # 0: sales, 1: total_discount, 2: discount_rate, 3: voids, 4: refunds
