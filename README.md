@@ -1,35 +1,49 @@
-# 🚀 AI Engineer Case Study: Dutchie POS Analytics Dashboard
+# Dutchie POS Case Study
 
-## Project Summary
+This repository contains a retail analytics dashboard built for Dutchie POS data. It ingests local files or live API responses, models the data inside DuckDB, and exposes operational KPIs through a Streamlit interface for store managers and analysts.
 
-This project delivers a responsive, one-screen analytics dashboard built using **Streamlit**, designed to provide retail managers with crucial Key Performance Indicators (KPIs) and actionable operational insights.
+## What This Project Does
 
-The solution utilizes a modern, high-performance data stack:
-* **DuckDB** as the analytical database (OLAP).
-* **Polars** for fast, memory-efficient data transformation and processing.
-* **Streamlit** and **Plotly** for the interactive dashboard front-end.
+- Ingests JSON or CSV exports from Dutchie POS
+- Supports live API fetches when an integrator key is configured
+- Cleans and models data into analytics-friendly tables
+- Computes KPIs such as net sales, AOV, items per ticket, void rate, refund rate, and discount impact
+- Visualizes operational trends for store-level decision making
 
-The core objective is to deliver metrics like sales, AOV, discount rates, and exception (void/refund) rates, along with a visual heatmap to identify operational bottlenecks and coaching opportunities.
+## Stack
 
-## 💾 Data Architecture & Pipeline
+- Python
+- Streamlit
+- DuckDB
+- Polars
+- Plotly
+- ReportLab
 
-The application follows a standard ELT (Extract, Load, Transform) pattern:
+## Project Structure
 
-1.  **Ingest (E & L):** Raw JSON/CSV files are loaded directly into the in-memory/on-disk **DuckDB** database (`data/dutchie.db`).
-2.  **Transform (T):** The `clean_and_model()` function standardizes data, creates a star schema (Fact & Dimensions), calculates derived columns like `gross_sale`, and ensures data quality (e.g., handling nulls).
-3.  **Metrics:** SQL queries (executed via DuckDB and Polars) calculate KPIs and aggregations required by the dashboard.
+- `app.py`: Streamlit dashboard entry point
+- `pipeline/ingest.py`: file ingestion logic
+- `pipeline/transform.py`: cleaning and data modeling
+- `pipeline/metrics.py`: KPI calculations
+- `pipeline/fetch.py`: Dutchie API fetch helpers
+- `data/`: local exports and DuckDB database
 
-## ⚙️ Setup and Installation
-
-Follow these steps to set up the project locally using a Python virtual environment.
-
-### Prerequisites
-
-* **Python 3.9+**
-* **Git**
-
-### Step 1: Clone the Repository
+## Run Locally
 
 ```bash
-git clone [YOUR_GIT_REPOSITORY_LINK]
-cd dutchie_pos_case
+pip install -r requirements.txt
+streamlit run app.py
+```
+
+## Skills Demonstrated
+
+- Analytics dashboard development
+- ELT pipeline design
+- Data modeling with DuckDB
+- Fast dataframe processing with Polars
+- KPI design for retail operations
+- Streamlit application development
+
+## Notes
+
+The app supports both offline local analysis and a live API-backed mode depending on environment configuration.
